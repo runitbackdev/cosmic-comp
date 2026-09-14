@@ -515,6 +515,7 @@ dependencies = [
  "async-task",
  "bitflags 2.13.2",
  "futures-core",
+ "nix 0.31.2",
  "polling",
  "rustix 1.1.4",
  "slab",
@@ -2996,7 +2997,7 @@ dependencies = [
  "hmac",
  "libc",
  "log",
- "nix",
+ "nix 0.29.0",
  "nom",
  "once_cell",
  "serde",
@@ -3360,6 +3361,18 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d6d0705320c1e6ba1d912b5e37cf18071b6c2e9b7fa8215a1e8a7651966f5d3"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
