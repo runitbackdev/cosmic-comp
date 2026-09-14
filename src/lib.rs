@@ -168,6 +168,16 @@ pub fn run(hooks: crate::hooks::Hooks) -> Result<(), Box<dyn Error>> {
     let mut event_loop = EventLoop::try_new().with_context(|| "Failed to initialize event loop")?;
     // init wayland
     let (display, socket) = init_wayland_display(&mut event_loop)?;
+    // The kiosk child's exit is only checked at the end of a loop iteration, so it went
+    // unnoticed until some client or input event happened to wake the loop. A SIGCHLD does.
+    if kiosk_command.is_some() {
+        let sigchld = calloop::signals::Signals::new(&[calloop::signals::Signal::SIGCHLD])
+            .with_context(|| "Failed to register SIGCHLD")?;
+        event_loop
+            .handle()
+            .insert_source(sigchld, |_, _, _| {})
+            .map_err(|err| anyhow::anyhow!("Failed to insert the SIGCHLD source: {err}"))?;
+    }
     // init state
     let mut state = state::State::new(
         &display,
