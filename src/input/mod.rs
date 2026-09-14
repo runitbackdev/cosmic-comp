@@ -22,7 +22,7 @@ use crate::{
             Stage, render_input_order,
             target::{KeyboardFocusTarget, PointerFocusTarget},
         },
-        grabs::{MenuGrab, MoveGrab, ReleaseMode, ResizeEdge, ResizeGrab},
+        grabs::{AutoscrollGrab, MenuGrab, MoveGrab, ReleaseMode, ResizeEdge, ResizeGrab},
         layout::{
             floating::ResizeGrabMarker,
             tiling::{NodeDesc, SwapWindowGrab, TilingLayout},
@@ -891,6 +891,7 @@ impl State {
                 }
 
                 let mut pass_event = !seat.supressed_buttons().remove(&backend_id, button);
+                let mut autoscroll = None;
                 if event.state() == ButtonState::Pressed {
                     // change the keyboard focus unless the pointer is grabbed
                     // We test for any matching surface type here but always use the root
@@ -905,6 +906,47 @@ impl State {
                             let shell = self.common.shell.read();
                             State::element_under(global_position, &output, &shell, &seat)
                         };
+
+                        // A middle press is held back for autoscroll, unless the window
+                        // under it keeps the middle button for itself, holds the pointer
+                        // in a constraint, or the press is aimed at the compositor.
+                        let autoscroll_config =
+                            &self.common.config.cosmic_conf.middle_click_autoscroll;
+                        if autoscroll_config.enabled
+                            && event.button() == Some(smithay::backend::input::MouseButton::Middle)
+                            && !self.source_modifiers(&backend_id, &seat).logo
+                            && !matches!(current_focus, Some(KeyboardFocusTarget::LockSurface(_)))
+                        {
+                            let shell = self.common.shell.read();
+                            let pointer_under =
+                                State::surface_under(global_position, &output, &shell)
+                                    .map(|(target, pos)| (target, pos.as_logical()));
+                            let excluded = pointer_under
+                                .as_ref()
+                                .and_then(|(target, _)| target.toplevel(&shell))
+                                .is_some_and(|toplevel| {
+                                    autoscroll_config.exclude.contains(&toplevel.app_id())
+                                });
+                            let ptr = seat.get_pointer().unwrap();
+                            let constrained = pointer_under
+                                .as_ref()
+                                .and_then(|(target, _)| target.wl_surface())
+                                .is_some_and(|surface| {
+                                    with_pointer_constraint(&surface, &ptr, |constraint| {
+                                        constraint.is_some_and(|constraint| constraint.is_active())
+                                    })
+                                });
+                            if !excluded && !constrained {
+                                autoscroll = Some(AutoscrollGrab::new(
+                                    &seat,
+                                    pointer_under,
+                                    global_position.as_logical(),
+                                    serial,
+                                    event.time(),
+                                    autoscroll_config.clone(),
+                                ));
+                            }
+                        }
                         // Grabbing a tiling resize handle (the gap between tiles) must not change keyboard focus
                         let on_resize_fork = matches!(
                             seat.get_pointer().unwrap().current_focus(),
@@ -1065,6 +1107,13 @@ impl State {
                     }
                     std::mem::drop(shell);
                 };
+
+                if let Some(grab) = autoscroll {
+                    let ptr = seat.get_pointer().unwrap();
+                    ptr.set_grab(self, grab, serial, Focus::Keep);
+                    ptr.frame(self);
+                    return;
+                }
 
                 if pass_event
                     && !matches!(current_focus, Some(KeyboardFocusTarget::LockSurface(_)))
@@ -2371,11 +2420,14 @@ impl State {
         let pointer = seat.get_pointer().unwrap();
         // Escape only cancels grabs the compositor started for its own interactions
         // For keyboard: SwapWindowGrab
-        // For pointer: MoveGrab, ResizeGrab, and MenuGrab
+        // For pointer: MoveGrab, ResizeGrab, MenuGrab and AutoscrollGrab
         let keyboard_grabbed =
             keyboard.with_grab(|_serial, grab| grab.is::<SwapWindowGrab>()) == Some(true);
         let pointer_grabbed = pointer.with_grab(|_serial, grab| {
-            grab.is::<MoveGrab>() || grab.is::<ResizeGrab>() || grab.is::<MenuGrab>()
+            grab.is::<MoveGrab>()
+                || grab.is::<ResizeGrab>()
+                || grab.is::<MenuGrab>()
+                || grab.is::<AutoscrollGrab>()
         }) == Some(true);
         let is_grabbed = keyboard_grabbed || pointer_grabbed;
 
