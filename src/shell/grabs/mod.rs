@@ -119,6 +119,8 @@ mod menu;
 pub use self::menu::*;
 mod moving;
 pub use self::moving::SeatMoveGrabState;
+mod autoscroll;
+pub use self::autoscroll::AutoscrollGrab;
 mod delay;
 
 bitflags::bitflags! {

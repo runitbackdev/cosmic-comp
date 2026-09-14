@@ -54,6 +54,82 @@ use xcursor::{
 
 static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../../../resources/cursor.rgba");
 
+/// Where middle-click autoscroll is heading, for its cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PanDirection {
+    /// Inside the dead zone: the origin cursor
+    All,
+    North,
+    NorthEast,
+    East,
+    SouthEast,
+    South,
+    SouthWest,
+    West,
+    NorthWest,
+}
+
+impl PanDirection {
+    /// The names to look up in the theme, most specific first. Themes rarely ship pan
+    /// cursors, so each falls back to the resize arrow pointing the same way, which is what
+    /// Chromium shows on Linux.
+    fn names(&self) -> &'static [&'static str] {
+        match self {
+            PanDirection::All => &["pan-all", "all-scroll", "fleur"],
+            PanDirection::North => &["pan-n", "n-resize", "top_side"],
+            PanDirection::NorthEast => &["pan-ne", "ne-resize", "top_right_corner"],
+            PanDirection::East => &["pan-e", "e-resize", "right_side"],
+            PanDirection::SouthEast => &["pan-se", "se-resize", "bottom_right_corner"],
+            PanDirection::South => &["pan-s", "s-resize", "bottom_side"],
+            PanDirection::SouthWest => &["pan-sw", "sw-resize", "bottom_left_corner"],
+            PanDirection::West => &["pan-w", "w-resize", "left_side"],
+            PanDirection::NorthWest => &["pan-nw", "nw-resize", "top_left_corner"],
+        }
+    }
+}
+
+/// A cursor the compositor draws itself: one of the standard shapes, or one of its own
+/// that a theme may or may not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CursorShape {
+    Icon(CursorIcon),
+    Pan(PanDirection),
+}
+
+impl From<CursorIcon> for CursorShape {
+    fn from(icon: CursorIcon) -> Self {
+        CursorShape::Icon(icon)
+    }
+}
+
+impl From<PanDirection> for CursorShape {
+    fn from(direction: PanDirection) -> Self {
+        CursorShape::Pan(direction)
+    }
+}
+
+impl CursorShape {
+    /// Every theme name that stands for this shape, most specific first.
+    fn names(&self) -> Vec<String> {
+        match self {
+            CursorShape::Icon(icon) => {
+                let name = icon.to_string();
+                let mut names: Vec<String> = cursor_aliases(&name)
+                    .iter()
+                    .map(|alias| alias.to_string())
+                    .collect();
+                names.push(name);
+                names
+            }
+            CursorShape::Pan(direction) => direction
+                .names()
+                .iter()
+                .map(|name| name.to_string())
+                .collect(),
+        }
+    }
+}
+
 /// A single frame of a scalable SVG cursor: the parsed SVG plus its metadata.
 #[derive(Debug, Clone)]
 struct SvgFrame {
@@ -82,7 +158,7 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    pub fn load(theme: &CursorTheme, shape: CursorIcon, size: u32) -> Cursor {
+    pub fn load(theme: &CursorTheme, shape: CursorShape, size: u32) -> Cursor {
         // Prefer a scalable SVG cursor when the theme provides one.
         if let Some(frames) = load_svg_icon(theme, shape) {
             return Cursor {
@@ -93,7 +169,7 @@ impl Cursor {
 
         let icons = load_icon(theme, shape)
             .map_err(|err| warn!(?err, "Unable to load xcursor, using fallback cursor"))
-            .or_else(|_| load_icon(theme, CursorIcon::Default))
+            .or_else(|_| load_icon(theme, CursorIcon::Default.into()))
             .unwrap_or_else(|_| {
                 vec![Image {
                     size: 32,
@@ -274,15 +350,9 @@ fn cursor_aliases(name: &str) -> &[&str] {
     }
 }
 
-fn load_icon(theme: &CursorTheme, shape: CursorIcon) -> Result<Vec<Image>, Error> {
-    let shape_name = shape.to_string();
-
-    for name in cursor_aliases(&shape_name)
-        .iter()
-        .copied()
-        .chain(std::iter::once(shape_name.as_str()))
-    {
-        if let Some(icon_path) = theme.load_icon(name) {
+fn load_icon(theme: &CursorTheme, shape: CursorShape) -> Result<Vec<Image>, Error> {
+    for name in shape.names() {
+        if let Some(icon_path) = theme.load_icon(&name) {
             let mut cursor_file = std::fs::File::open(&icon_path)?;
             let mut cursor_data = Vec::new();
             cursor_file.read_to_end(&mut cursor_data)?;
@@ -310,15 +380,10 @@ struct SvgCursorMeta {
 }
 
 /// Resolves a scalable (SVG) cursor for `shape`
-fn load_svg_icon(theme: &CursorTheme, shape: CursorIcon) -> Option<Vec<SvgFrame>> {
-    let shape_name = shape.to_string();
+fn load_svg_icon(theme: &CursorTheme, shape: CursorShape) -> Option<Vec<SvgFrame>> {
     let options = usvg::Options::default();
-    for name in cursor_aliases(&shape_name)
-        .iter()
-        .copied()
-        .chain(std::iter::once(shape_name.as_str()))
-    {
-        if let Some(dir) = theme.load_scalable(name)
+    for name in shape.names() {
+        if let Some(dir) = theme.load_scalable(&name)
             && let Some(frames) = parse_svg_dir(&dir, &options)
         {
             return Some(frames);
@@ -453,12 +518,12 @@ pub fn draw_dnd_icon<R>(
 
 pub type CursorState = Mutex<CursorStateInner>;
 pub struct CursorStateInner {
-    current_cursor: Option<CursorIcon>,
+    current_cursor: Option<CursorShape>,
 
     cursor_theme: CursorTheme,
     cursor_size: u32,
 
-    cursors: HashMap<CursorIcon, Cursor>,
+    cursors: HashMap<CursorShape, Cursor>,
     current_image: Option<Image>,
     image_cache: Vec<CachedFrame>,
 
@@ -479,7 +544,7 @@ pub struct CursorStateInner {
 
 /// A rasterized cursor frame, keyed by `(shape, pixel size, frame index)`.
 struct CachedFrame {
-    key: (CursorIcon, u32, usize),
+    key: (CursorShape, u32, usize),
     image: Image,
     buffer: MemoryRenderBuffer,
     unmagnified: bool,
@@ -519,15 +584,20 @@ fn same_direction(a: f64, b: f64) -> bool {
 }
 
 impl CursorStateInner {
-    pub fn set_shape(&mut self, shape: CursorIcon) {
-        self.current_cursor = Some(shape);
+    pub fn set_shape(&mut self, shape: impl Into<CursorShape>) {
+        self.current_cursor = Some(shape.into());
+    }
+
+    pub fn shape(&self) -> Option<CursorShape> {
+        self.current_cursor
     }
 
     pub fn unset_shape(&mut self) {
         self.current_cursor = None;
     }
 
-    pub fn get_named_cursor(&mut self, shape: CursorIcon) -> &Cursor {
+    pub fn get_named_cursor(&mut self, shape: impl Into<CursorShape>) -> &Cursor {
+        let shape = shape.into();
         let cursor_theme = &self.cursor_theme;
         let cursor_size = self.cursor_size;
         self.cursors
@@ -752,11 +822,11 @@ pub fn draw_cursor<R>(
     }
 
     let named_cursor = state.current_cursor.or(match cursor_status {
-        CursorImageStatus::Named(named_cursor) => Some(named_cursor),
+        CursorImageStatus::Named(named_cursor) => Some(named_cursor.into()),
         _ => None,
     });
     if let Some(current_cursor) = named_cursor {
-        if !draw_default && current_cursor == CursorIcon::Default {
+        if !draw_default && current_cursor == CursorShape::Icon(CursorIcon::Default) {
             return;
         }
 
@@ -900,5 +970,36 @@ fn hide_cursor(state: &mut State, seat: &Seat<State>) {
     let outputs: Vec<_> = state.common.shell.read().outputs().cloned().collect();
     for output in outputs {
         state.backend.schedule_render(&output);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A theme that ships the pan shapes resolves them by name; one that does not falls
+    /// back to the resize arrow the same way. `IKIGAI_CURSORS` points at a directory of
+    /// themes (Ikigai's `themes/<name>/cursors`); without it the test only checks fallback.
+    #[test]
+    fn pan_cursors_load_by_name_with_fallback() {
+        let theme = std::env::var("IKIGAI_CURSORS").ok();
+        // SAFETY: single test process, nothing else reads the environment concurrently.
+        unsafe {
+            std::env::set_var("XCURSOR_PATH", theme.as_deref().unwrap_or("/nonexistent"));
+        }
+        let ikigai = CursorTheme::load("Ikigai");
+        let names = CursorShape::Pan(PanDirection::North).names();
+        assert_eq!(names[0], "pan-n");
+        assert_eq!(names[1], "n-resize");
+        if theme.is_some() {
+            assert!(
+                ikigai.load_scalable("pan-n").is_some(),
+                "Ikigai theme has no scalable pan-n"
+            );
+            let cursor = Cursor::load(&ikigai, PanDirection::North.into(), 24);
+            assert!(matches!(cursor.kind, CursorKind::Svg(_)));
+        }
+        let all = CursorShape::Pan(PanDirection::All).names();
+        assert_eq!(all[1], "all-scroll");
     }
 }

@@ -112,6 +112,8 @@ pub struct CosmicCompConfig {
     pub cursor_shake_to_find: bool,
     pub activation_policy: ActivationPolicy,
     pub decoration_preference: DecorationPreference,
+    /// Hold the middle button and move to scroll the window under the pointer
+    pub middle_click_autoscroll: AutoscrollConfig,
 }
 
 impl Default for CosmicCompConfig {
@@ -152,6 +154,37 @@ impl Default for CosmicCompConfig {
             cursor_shake_to_find: true,
             activation_policy: ActivationPolicy::default(),
             decoration_preference: DecorationPreference::default(),
+            middle_click_autoscroll: AutoscrollConfig::default(),
+        }
+    }
+}
+
+/// Middle-click autoscroll, the way Windows does it: press the middle button, move past
+/// the dead zone and the window under the pointer scrolls at a speed that grows with the
+/// distance from the press, until the button is released. A press released inside the
+/// dead zone is delivered to the client as an ordinary middle click.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct AutoscrollConfig {
+    pub enabled: bool,
+    /// Distance from the press, in logical pixels, before scrolling starts
+    pub dead_zone: f64,
+    /// Speed in logical pixels per millisecond is `multiplier * distance ^ exponent`,
+    /// per axis, with the distance measured from the press
+    pub multiplier: f64,
+    pub exponent: f64,
+    /// App ids whose windows keep the middle button for themselves
+    pub exclude: Vec<String>,
+}
+
+impl Default for AutoscrollConfig {
+    fn default() -> Self {
+        // Chromium's curve for its own middle-click autoscroll.
+        AutoscrollConfig {
+            enabled: false,
+            dead_zone: 15.0,
+            multiplier: 0.000008,
+            exponent: 2.2,
+            exclude: Vec::new(),
         }
     }
 }
@@ -262,4 +295,21 @@ pub enum XwaylandDescaling {
     Disabled,
     #[default]
     Fractional,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autoscroll_config_reads_as_written() {
+        let text = "(\n    enabled: true,\n    dead_zone: 15.0,\n    multiplier: 0.000008,\n    exponent: 2.2,\n    exclude: [\"blender\"],\n)\n";
+        let config: AutoscrollConfig = ron::from_str(text).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.exclude, vec!["blender".to_string()]);
+        let default = AutoscrollConfig::default();
+        let round_trip: AutoscrollConfig =
+            ron::from_str(&ron::to_string(&default).unwrap()).unwrap();
+        assert_eq!(round_trip, default);
+    }
 }

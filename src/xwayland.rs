@@ -265,7 +265,7 @@ impl XWaylandState {
     pub fn reload_cursor(&mut self, scale: f64) {
         if let Some(wm) = self.xwm.as_mut() {
             let (theme, size) = load_cursor_theme();
-            let cursor = Cursor::load(&theme, CursorIcon::Default, size);
+            let cursor = Cursor::load(&theme, CursorIcon::Default.into(), size);
             let image = cursor.get_image(scale.ceil() as u32, 0);
 
             let (pixels_rgba, size, hotspot) = match scale_cursor(scale, size, &image) {

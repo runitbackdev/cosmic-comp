@@ -49,8 +49,8 @@ mod types;
 use cosmic::config::CosmicTk;
 pub use cosmic_comp_config::EdidProduct;
 use cosmic_comp_config::{
-    ActivationPolicy, AppearanceConfig, CosmicCompConfig, DecorationPreference, KeyboardConfig,
-    TileBehavior, XkbConfig, XwaylandDescaling, XwaylandEavesdropping, ZoomConfig,
+    ActivationPolicy, AppearanceConfig, AutoscrollConfig, CosmicCompConfig, DecorationPreference,
+    KeyboardConfig, TileBehavior, XkbConfig, XwaylandDescaling, XwaylandEavesdropping, ZoomConfig,
     input::{DeviceState as InputDeviceState, InputConfig, TouchpadOverride},
     output::comp::{
         OutputConfig, OutputInfo, OutputState, OutputsConfig, TransformDef, load_outputs,
@@ -982,6 +982,10 @@ fn config_changed(config: cosmic_config::Config, keys: Vec<String>, state: &mut 
             "cursor_shake_to_find" => {
                 let new = get_config::<bool>(&config, "cursor_shake_to_find");
                 state.common.config.cosmic_conf.cursor_shake_to_find = new;
+            }
+            "middle_click_autoscroll" => {
+                let new = get_config::<AutoscrollConfig>(&config, "middle_click_autoscroll");
+                state.common.config.cosmic_conf.middle_click_autoscroll = new;
             }
             "cursor_hide_timeout" => {
                 let new = get_config::<Option<u32>>(&config, "cursor_hide_timeout");
