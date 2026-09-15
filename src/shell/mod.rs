@@ -835,6 +835,8 @@ pub struct Workspaces {
     pub layout: WorkspaceLayout,
     mode: WorkspaceMode,
     autotile: bool,
+    /// The configured primary output's connector name, or empty.
+    pub primary_output: String,
     autotile_behavior: TileBehavior,
     theme: cosmic::Theme,
     appearance: AppearanceConfig,
@@ -850,6 +852,7 @@ impl Workspaces {
             layout: config.cosmic_conf.workspaces.workspace_layout,
             mode: config.cosmic_conf.workspaces.workspace_mode,
             autotile: config.cosmic_conf.autotile,
+            primary_output: config.cosmic_conf.primary_output.clone(),
             autotile_behavior: config.cosmic_conf.autotile_behavior,
             theme,
             appearance: config.cosmic_conf.appearance_settings,
@@ -927,6 +930,15 @@ impl Workspaces {
         self.sets.insert(output.clone(), set);
     }
 
+    /// The output a seat falls back to when its own has gone or none has been picked
+    /// yet: the configured primary while it is connected, else the first one added.
+    pub fn fallback_output(&self) -> Option<&Output> {
+        self.sets
+            .keys()
+            .find(|o| !self.primary_output.is_empty() && o.name() == self.primary_output)
+            .or_else(|| self.sets.keys().next())
+    }
+
     pub fn remove_output<'a>(
         &mut self,
         output: &Output,
@@ -946,10 +958,8 @@ impl Workspaces {
                 }
             }
 
-            // TODO: Heuristic which output to move to.
-            // It is supposed to be the *most* internal, we just pick the first one for now
-            // and hope enumeration order works in our favor.
-            let new_output = self.sets.get_index(0).map(|(o, _)| o.clone());
+            // The configured primary while it is here, else the first one added.
+            let new_output = self.fallback_output().cloned();
             if let Some(new_output) = new_output {
                 for seat in seats {
                     if &seat.active_output() == output {
@@ -2261,6 +2271,11 @@ impl Shell {
 
     pub fn outputs(&self) -> impl DoubleEndedIterator<Item = &Output> {
         self.workspaces.sets.keys()
+    }
+
+    /// The output a seat falls back to: see [`Workspaces::fallback_output`].
+    pub fn fallback_output(&self) -> Option<&Output> {
+        self.workspaces.fallback_output()
     }
 
     pub fn next_output(&self, current_output: &Output, direction: Direction) -> Option<&Output> {

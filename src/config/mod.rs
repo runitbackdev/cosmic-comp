@@ -987,6 +987,11 @@ fn config_changed(config: cosmic_config::Config, keys: Vec<String>, state: &mut 
                 let new = get_config::<AutoscrollConfig>(&config, "middle_click_autoscroll");
                 state.common.config.cosmic_conf.middle_click_autoscroll = new;
             }
+            "primary_output" => {
+                let new = get_config::<String>(&config, "primary_output");
+                state.common.config.cosmic_conf.primary_output = new.clone();
+                state.common.shell.write().workspaces.primary_output = new;
+            }
             "primary_selection" => {
                 let new = get_config::<bool>(&config, "primary_selection");
                 state.common.config.cosmic_conf.primary_selection = new;

@@ -118,6 +118,11 @@ pub struct CosmicCompConfig {
     /// Off, no client is told it exists; clients already connected keep it until they
     /// reconnect.
     pub primary_selection: bool,
+    /// The output (by connector name) a seat falls back to when its own has gone or
+    /// none has been picked yet, and that becomes the seat's when it appears: where new
+    /// windows land after login and after the outputs come back from sleep. Empty, the
+    /// first output added, as before.
+    pub primary_output: String,
 }
 
 impl Default for CosmicCompConfig {
@@ -160,6 +165,7 @@ impl Default for CosmicCompConfig {
             decoration_preference: DecorationPreference::default(),
             middle_click_autoscroll: AutoscrollConfig::default(),
             primary_selection: true,
+            primary_output: String::new(),
         }
     }
 }
