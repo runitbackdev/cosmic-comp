@@ -27,10 +27,15 @@ impl WlrLayerShellHandler for State {
     ) {
         let mut shell = self.common.shell.write();
         let seat = shell.seats.last_active().clone();
+        // A surface that names no output goes where the keyboard is, not where the
+        // pointer happens to rest: a launcher opened over a shell's card lands on the
+        // card's output, whichever monitor the mouse is on. New toplevels already pick
+        // their output this way (xdg_shell). Falls back to the pointer's output when
+        // nothing has focus, which is what upstream always did.
         let output = wl_output
             .as_ref()
             .and_then(Output::from_resource)
-            .unwrap_or_else(|| seat.active_output());
+            .unwrap_or_else(|| seat.focused_or_active_output());
         shell.pending_layers.push(PendingLayer {
             surface: LayerSurface::new(surface, namespace),
             output,
