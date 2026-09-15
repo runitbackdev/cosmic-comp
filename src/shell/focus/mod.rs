@@ -214,6 +214,17 @@ impl Shell {
             state.common.shell.write().append_focus_stack(target, seat);
         }
 
+        // While a lock or an exclusive layer surface is up it keeps the keyboard; the
+        // window is on the focus stack and gets it once the overlay goes. Handing it over
+        // here only for `refresh_focus` to take it back gave the overlay a leave and enter
+        // a few milliseconds apart.
+        if target
+            .is_some_and(|target| overlay_admits(&state.common.shell.read(), target) == Some(false))
+        {
+            state.common.shell.write().update_active();
+            return;
+        }
+
         update_focus_state(seat, target, state, serial, update_cursor);
 
         state.common.shell.write().update_active();
@@ -633,43 +644,8 @@ fn focus_target_is_valid(
     output: &Output,
     target: KeyboardFocusTarget,
 ) -> bool {
-    // If a session lock is active, only lock surfaces and lock layers can be focused
-    if shell.session_lock.is_some() {
-        if let KeyboardFocusTarget::LayerSurface(layer) = &target {
-            return layer_show_on_lock(layer.wl_surface());
-        } else if let KeyboardFocusTarget::Popup(popup) = &target
-            && let Ok(root) = find_popup_root_surface(popup)
-        {
-            return layer_show_on_lock(&root);
-        }
-        return matches!(target, KeyboardFocusTarget::LockSurface(_));
-    }
-
-    // If an exclusive layer shell surface exists (on any output), only exclusive
-    // shell surfaces can have focus, on the highest layer with exclusive surfaces.
-    // Popups are judged by their root surface, so an exclusive surface can
-    // still open grabbing popups (menus, dropdowns, context menus).
-    if let Some(layer) = exclusive_layer_surface_layer(shell) {
-        let is_exclusive_on_layer = |layer_surface: &LayerSurface| {
-            let data = layer_surface.cached_state();
-            (data.keyboard_interactivity, data.layer) == (KeyboardInteractivity::Exclusive, layer)
-        };
-        return match target {
-            KeyboardFocusTarget::LayerSurface(layer_surface) => {
-                is_exclusive_on_layer(&layer_surface)
-            }
-            KeyboardFocusTarget::Popup(popup) => find_popup_root_surface(&popup)
-                .ok()
-                .and_then(|root| {
-                    shell.outputs().find_map(|o| {
-                        layer_map_for_output(o)
-                            .layer_for_surface(&root, WindowSurfaceType::ALL)
-                            .map(&is_exclusive_on_layer)
-                    })
-                })
-                .unwrap_or(false),
-            _ => false,
-        };
+    if let Some(admitted) = overlay_admits(shell, &target) {
+        return admitted;
     }
 
     match target {
@@ -803,6 +779,44 @@ fn update_pointer_focus(state: &mut State, seat: &Seat<State>) {
             );
         }
     }
+}
+
+/// Whether an overlay that owns the keyboard admits `target`, `None` when no overlay is
+/// up. While a session lock is active: lock surfaces and the layer surfaces that asked to
+/// show on lock. While an exclusive layer surface exists: exclusive surfaces on the highest
+/// layer that has one. Popups are judged by their root surface, so an exclusive surface can
+/// still open grabbing popups (menus, dropdowns, context menus).
+fn overlay_admits(shell: &Shell, target: &KeyboardFocusTarget) -> Option<bool> {
+    if shell.session_lock.is_some() {
+        if let KeyboardFocusTarget::LayerSurface(layer) = target {
+            return Some(layer_show_on_lock(layer.wl_surface()));
+        } else if let KeyboardFocusTarget::Popup(popup) = target
+            && let Ok(root) = find_popup_root_surface(popup)
+        {
+            return Some(layer_show_on_lock(&root));
+        }
+        return Some(matches!(target, KeyboardFocusTarget::LockSurface(_)));
+    }
+
+    let layer = exclusive_layer_surface_layer(shell)?;
+    let is_exclusive_on_layer = |layer_surface: &LayerSurface| {
+        let data = layer_surface.cached_state();
+        (data.keyboard_interactivity, data.layer) == (KeyboardInteractivity::Exclusive, layer)
+    };
+    Some(match target {
+        KeyboardFocusTarget::LayerSurface(layer_surface) => is_exclusive_on_layer(layer_surface),
+        KeyboardFocusTarget::Popup(popup) => find_popup_root_surface(popup)
+            .ok()
+            .and_then(|root| {
+                shell.outputs().find_map(|o| {
+                    layer_map_for_output(o)
+                        .layer_for_surface(&root, WindowSurfaceType::ALL)
+                        .map(&is_exclusive_on_layer)
+                })
+            })
+            .unwrap_or(false),
+        _ => false,
+    })
 }
 
 // Get the top-most layer, if any, with at least one surface with exclusive keyboard interactivity.
