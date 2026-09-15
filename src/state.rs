@@ -129,7 +129,10 @@ use std::{
     collections::HashSet,
     ffi::OsString,
     process::{Child, Command},
-    sync::{Arc, LazyLock, Once, atomic::AtomicBool},
+    sync::{
+        Arc, LazyLock, Once,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -233,6 +236,8 @@ smithay::delegate_dispatch2!(State);
 #[derive(Debug)]
 pub struct Common {
     pub config: Config,
+    /// What the primary selection global's filter reads: whether clients get to see it.
+    pub primary_selection_offered: Arc<AtomicBool>,
 
     pub socket: OsString,
     pub display_handle: DisplayHandle,
@@ -681,7 +686,16 @@ impl State {
         let overlap_notify_state =
             OverlapNotifyState::new::<Self, _>(dh, client_has_no_security_context);
         let presentation_state = PresentationState::new::<Self>(dh, clock.id() as u32);
-        let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
+        // Primary selection is offered to no client when the config says so: the only
+        // way to switch middle-click paste off for every toolkit at once.
+        let primary_selection_offered =
+            Arc::new(AtomicBool::new(config.cosmic_conf.primary_selection));
+        let primary_selection_state = {
+            let offered = primary_selection_offered.clone();
+            PrimarySelectionState::new_with_filter::<Self, _>(dh, move |_| {
+                offered.load(Ordering::Relaxed)
+            })
+        };
         let cosmic_image_capture_source_state =
             CosmicImageCaptureSourceState::new::<Self, _>(dh, client_not_sandboxed);
         let output_capture_source_state =
@@ -771,6 +785,7 @@ impl State {
         State {
             common: Common {
                 config,
+                primary_selection_offered,
                 socket,
                 display_handle: dh.clone(),
                 event_loop_handle: handle,
