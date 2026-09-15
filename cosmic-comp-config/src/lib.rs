@@ -114,6 +114,10 @@ pub struct CosmicCompConfig {
     pub decoration_preference: DecorationPreference,
     /// Hold the middle button and move to scroll the window under the pointer
     pub middle_click_autoscroll: AutoscrollConfig,
+    /// Offer the primary selection (select to copy, middle-click to paste) to clients.
+    /// Off, no client is told it exists; clients already connected keep it until they
+    /// reconnect.
+    pub primary_selection: bool,
 }
 
 impl Default for CosmicCompConfig {
@@ -155,6 +159,7 @@ impl Default for CosmicCompConfig {
             activation_policy: ActivationPolicy::default(),
             decoration_preference: DecorationPreference::default(),
             middle_click_autoscroll: AutoscrollConfig::default(),
+            primary_selection: true,
         }
     }
 }
