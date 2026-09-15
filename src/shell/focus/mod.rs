@@ -208,6 +208,17 @@ impl Shell {
             state.common.shell.write().append_focus_stack(target, seat);
         }
 
+        // While a lock or an exclusive layer surface is up it keeps the keyboard; the
+        // window is on the focus stack and gets it once the overlay goes. Handing it over
+        // here only for `refresh_focus` to take it back gave the overlay a leave and enter
+        // a few milliseconds apart.
+        if target
+            .is_some_and(|target| overlay_admits(&state.common.shell.read(), target) == Some(false))
+        {
+            state.common.shell.write().update_active();
+            return;
+        }
+
         update_focus_state(seat, target, state, serial, update_cursor);
 
         state.common.shell.write().update_active();
@@ -627,20 +638,8 @@ fn focus_target_is_valid(
     output: &Output,
     target: KeyboardFocusTarget,
 ) -> bool {
-    // If a session lock is active, only lock surfaces can be focused
-    if shell.session_lock.is_some() {
-        return matches!(target, KeyboardFocusTarget::LockSurface(_));
-    }
-
-    // If an exclusive layer shell surface exists (on any output), only exclusive
-    // shell surfaces can have focus, on the highest layer with exclusive surfaces.
-    if let Some(layer) = exclusive_layer_surface_layer(shell) {
-        return if let KeyboardFocusTarget::LayerSurface(layer_surface) = target {
-            let data = layer_surface.cached_state();
-            (data.keyboard_interactivity, data.layer) == (KeyboardInteractivity::Exclusive, layer)
-        } else {
-            false
-        };
+    if let Some(admitted) = overlay_admits(shell, &target) {
+        return admitted;
     }
 
     match target {
@@ -778,6 +777,24 @@ fn update_pointer_focus(state: &mut State, seat: &Seat<State>) {
 
 // Get the top-most layer, if any, with at least one surface with exclusive keyboard interactivity.
 // Only considers surface in `Top` or `Overlay` layer.
+/// Whether an overlay that owns the keyboard admits `target`: only lock surfaces while
+/// a session lock is active, only exclusive layer surfaces on the highest layer that
+/// has one while any exists. `None` when no overlay is up.
+fn overlay_admits(shell: &Shell, target: &KeyboardFocusTarget) -> Option<bool> {
+    if shell.session_lock.is_some() {
+        return Some(matches!(target, KeyboardFocusTarget::LockSurface(_)));
+    }
+    let layer = exclusive_layer_surface_layer(shell)?;
+    Some(
+        if let KeyboardFocusTarget::LayerSurface(layer_surface) = target {
+            let data = layer_surface.cached_state();
+            (data.keyboard_interactivity, data.layer) == (KeyboardInteractivity::Exclusive, layer)
+        } else {
+            false
+        },
+    )
+}
+
 fn exclusive_layer_surface_layer(shell: &Shell) -> Option<Layer> {
     let mut layer = None;
     for output in shell.outputs() {
