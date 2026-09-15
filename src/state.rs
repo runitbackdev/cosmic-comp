@@ -586,7 +586,18 @@ impl LockedBackend<'_> {
             });
 
             match final_config.enabled {
-                OutputState::Enabled => shell_ref.workspaces.add_output(output, workspace_state),
+                OutputState::Enabled => {
+                    shell_ref.workspaces.add_output(output, workspace_state);
+                    // The primary arriving (at login, back from sleep) is where the seat
+                    // goes, whatever came up before it.
+                    if !shell_ref.workspaces.primary_output.is_empty()
+                        && output.name() == shell_ref.workspaces.primary_output
+                    {
+                        for seat in shell_ref.seats.iter() {
+                            seat.set_active_output(output);
+                        }
+                    }
+                }
                 _ => {
                     let shell = &mut *shell_ref;
                     shell.workspaces.remove_output(

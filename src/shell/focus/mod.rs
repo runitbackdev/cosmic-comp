@@ -528,12 +528,13 @@ impl Common {
                 let focused_output = seat.focused_output();
                 let active_output = seat.active_output();
 
-                // If the focused or active output is not in the list of outputs, switch to the first output
+                // If the focused or active output is not in the list of outputs, switch to
+                // the primary, or the first output
                 if focused_output.is_some_and(|f| !shell.outputs().any(|o| &f == o)) {
                     seat.set_focused_output(None);
                 }
                 if !shell.outputs().any(|o| o == &active_output) {
-                    if let Some(other) = shell.outputs().next() {
+                    if let Some(other) = shell.fallback_output() {
                         seat.set_active_output(other);
                     }
                     continue;
