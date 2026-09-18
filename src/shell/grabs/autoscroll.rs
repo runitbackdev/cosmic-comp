@@ -193,6 +193,17 @@ impl AutoscrollGrab {
         state.backend.schedule_render(&output);
     }
 
+    /// The end of the scroll, for clients that wait for one: GTK holds a continuous scroll
+    /// open until its stop, and Ghostty reads the wheel as a touchpad for as long as it is.
+    fn send_stop(state: &mut State, handle: &mut PointerInnerHandle<'_, State>) {
+        let frame = AxisFrame::new(InputTime::now())
+            .source(AxisSource::Continuous)
+            .stop(Axis::Horizontal)
+            .stop(Axis::Vertical);
+        handle.axis(state, frame);
+        handle.frame(state);
+    }
+
     /// Hand the client the press it never got, so the release that follows pairs up.
     fn deliver_press(&self, state: &mut State, handle: &mut PointerInnerHandle<'_, State>) {
         let press = ButtonEvent {
@@ -269,10 +280,12 @@ impl PointerGrab<State> for AutoscrollGrab {
             }
             // Scrolling ends on our release, or any other press; the client never sees ours.
             (Phase::Scrolling, ButtonState::Released) if ours => {
+                Self::send_stop(state, handle);
                 self.stop(state);
                 handle.unset_grab(self, state, event.serial, event.time, true);
             }
             (Phase::Scrolling, ButtonState::Pressed) => {
+                Self::send_stop(state, handle);
                 self.stop(state);
                 handle.button(state, event);
                 handle.unset_grab(self, state, event.serial, event.time, true);
