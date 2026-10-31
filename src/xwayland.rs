@@ -4,6 +4,12 @@ use std::{
     os::unix::io::OwnedFd,
     process::Stdio,
     sync::mpsc::{self, Receiver, Sender},
+    time::Duration,
+};
+
+use calloop::{
+    RegistrationToken,
+    timer::{TimeoutAction, Timer},
 };
 
 use crate::{
@@ -55,10 +61,10 @@ use smithay::{
     },
     xwayland::{
         X11Surface, X11Wm, XWayland, XWaylandClientData, XWaylandEvent, XwmHandler,
-        xwm::{Reorder, XwmId},
+        xwm::{PrimaryOutputError, Reorder, XwmId},
     },
 };
-use tracing::{error, trace, warn};
+use tracing::{debug, error, trace, warn};
 use xcursor::parser::Image;
 use xkbcommon::xkb::Keysym;
 
@@ -73,6 +79,8 @@ pub struct XWaylandState {
     pub clipboard_selection_dirty: Option<Vec<String>>,
     pub primary_selection_dirty: Option<Vec<String>>,
     pub xrdb_thread: Sender<(String, u32)>,
+    /// A pending retry of `set_xwayland_primary_output`, see there.
+    pub primary_output_retry: Option<RegistrationToken>,
 }
 
 fn xrdb_thread(rx: Receiver<(String, u32)>, display: u32) {
@@ -156,6 +164,7 @@ impl State {
                         clipboard_selection_dirty: None,
                         primary_selection_dirty: None,
                         xrdb_thread: tx,
+                        primary_output_retry: None,
                     });
 
                     let wm = match X11Wm::start_wm(
@@ -750,6 +759,24 @@ impl Common {
     }
 
     pub fn update_xwayland_primary_output(&mut self) {
+        if let Some(xstate) = self.xwayland_state.as_mut()
+            && let Some(token) = xstate.primary_output_retry.take()
+        {
+            self.event_loop_handle.remove(token);
+        }
+        self.set_xwayland_primary_output(0);
+    }
+
+    /// Sets the RandR primary to the output configured as `xwayland_primary`. This runs as
+    /// soon as an output is (re)added, but Xwayland learns of the wl_output over the wire
+    /// and may have no RandR output by that name yet; on `OutputUnknown` it tries again
+    /// every 100 ms for up to 3 s, otherwise the X screen keeps no primary until the next
+    /// output change (every wake from sleep on a multi-head NVIDIA box) and X11 clients
+    /// that key on the primary, Unity among them, pick the wrong screen.
+    fn set_xwayland_primary_output(&mut self, attempt: u32) {
+        const RETRY_EVERY: Duration = Duration::from_millis(100);
+        const RETRIES: u32 = 30;
+
         let mut xwayland_primary_output = None;
         for output in self.output_configuration_state.outputs() {
             if output.config().xwayland_primary {
@@ -758,13 +785,41 @@ impl Common {
             }
         }
 
-        if let Some(xstate) = self.xwayland_state.as_mut()
-            && let Some(xwm) = xstate.xwm.as_mut()
-            && let Err(err) = xwm.set_randr_primary_output(xwayland_primary_output.as_ref())
-        {
-            warn!("Failed to set xwayland primary output: {}", err);
+        let Some(xstate) = self.xwayland_state.as_mut() else {
+            self.output_configuration_state.update();
             return;
         };
+        let Some(xwm) = xstate.xwm.as_mut() else {
+            self.output_configuration_state.update();
+            return;
+        };
+        match xwm.set_randr_primary_output(xwayland_primary_output.as_ref()) {
+            Ok(()) => {}
+            Err(PrimaryOutputError::OutputUnknown) if attempt < RETRIES => {
+                debug!(
+                    "Xwayland does not know the primary output yet, retrying ({})",
+                    attempt + 1
+                );
+                match self.event_loop_handle.insert_source(
+                    Timer::from_duration(RETRY_EVERY),
+                    move |_, _, state| {
+                        if let Some(xstate) = state.common.xwayland_state.as_mut() {
+                            xstate.primary_output_retry = None;
+                        }
+                        state.common.set_xwayland_primary_output(attempt + 1);
+                        TimeoutAction::Drop
+                    },
+                ) {
+                    Ok(token) => xstate.primary_output_retry = Some(token),
+                    Err(err) => warn!("Failed to schedule xwayland primary output retry: {}", err),
+                }
+                return;
+            }
+            Err(err) => {
+                warn!("Failed to set xwayland primary output: {}", err);
+                return;
+            }
+        }
 
         self.output_configuration_state.update();
     }
